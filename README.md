@@ -1,4 +1,8 @@
-# FXT Team New Tab — быстрая установка
+# FXT Team New Tab
+
+Расширение для Google Chrome открывает [стартовую страницу FXT Team](https://homepage.fxtteam.ru/) в каждой новой вкладке. Нажмите `Ctrl+T` или кнопку «+», чтобы перейти к поиску и своим ссылкам. Если сайт недоступен, во вкладке появятся часы и кнопка «Попробовать снова».
+
+## Быстрая установка
 
 1. Скачайте и запустите установщик для своей системы.
    - **Windows** — дважды щёлкните по скачанному файлу [install.cmd](https://github.com/AenyellHael/browser-startpage-extension/releases/latest/download/install.cmd).
