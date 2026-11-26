@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FXT Team — новая вкладка</title>
+  <script defer src="newtab.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { color-scheme: dark; background: #0f172a; }
+    body {
+      margin: 0;
+      color: white;
+      font: 16px/1.5 system-ui, sans-serif;
+    }
+    .background {
+      position: fixed;
+      inset: 0;
+      overflow: hidden;
+      background: linear-gradient(to bottom right, #0f172a, #1e293b, #0f172a);
+    }
+    .glow {
+      position: absolute;
+      width: 20rem;
+      height: 20rem;
+      border-radius: 50%;
+      mix-blend-mode: screen;
+      filter: blur(64px);
+      animation: blob 7s infinite;
+    }
+    .purple { top: 0; left: -10rem; background: rgb(168 85 247 / 20%); }
+    .blue { top: 0; right: -10rem; background: rgb(59 130 246 / 20%); animation-delay: 2s; }
+    .pink { bottom: -10rem; left: 5rem; background: rgb(236 72 153 / 20%); animation-delay: 4s; }
+    @keyframes blob {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      33% { transform: translate(30px, -50px) scale(1.1); }
+      66% { transform: translate(-20px, 20px) scale(.9); }
+    }
+    main {
+      position: relative;
+      min-height: 100dvh;
+      display: grid;
+      place-content: center;
+      grid-template-columns: minmax(0, 42rem);
+      text-align: center;
+    }
+    #skeleton { display: flex; flex-direction: column; align-items: center; gap: 2rem; }
+    .block {
+      max-width: 100%;
+      background: rgb(255 255 255 / 10%);
+      backdrop-filter: blur(4px);
+      animation: pulse 2s cubic-bezier(.4, 0, .6, 1) infinite;
+    }
+    @keyframes pulse { 50% { opacity: .5; } }
+    .clock { width: 20rem; height: 5rem; border-radius: 1rem; }
+    .greeting { width: 16rem; height: 2.5rem; border-radius: .75rem; }
+    .engines { display: flex; gap: .75rem; max-width: 100%; }
+    .engines .block { width: 6rem; height: 2.5rem; border-radius: 999px; }
+    .search { position: relative; width: 100%; }
+    .field { height: 4rem; border-radius: 999px; }
+    .submit {
+      position: absolute;
+      top: .5rem; right: .5rem;
+      width: 3rem; height: 3rem;
+      border-radius: 50%;
+      background: rgb(255 255 255 / 20%);
+    }
+    .offline-clock { margin: 0 1rem 2rem; }
+    #skeleton:not([hidden]) ~ .offline-clock { display: none; }
+    .digits {
+      display: flex; justify-content: center; align-items: center; gap: .35rem;
+      font-size: clamp(3.5rem, 10vw, 6rem); font-weight: 300;
+      line-height: 1; letter-spacing: .05em; font-variant-numeric: tabular-nums;
+    }
+    .separator { opacity: .3; }
+    #seconds { font-size: .625em; color: #cbd5e1; }
+    #date { margin-top: 1rem; color: #cbd5e1; letter-spacing: .05em; text-transform: uppercase; }
+    #status { margin: 0 1rem; font-weight: 300; font-size: clamp(1.5rem, 4vw, 2.25rem); letter-spacing: .025em; line-height: 1.2; }
+    #skeleton:not([hidden]) ~ #status {
+      position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+    }
+    button {
+      display: inline-flex; align-items: center; gap: .65rem; justify-self: center;
+      margin-top: 2rem; padding: .75rem 1.3rem; border-radius: 999px;
+      border: 1px solid rgb(255 255 255 / 20%); background: rgb(255 255 255 / 10%);
+      backdrop-filter: blur(12px); color: white; font: inherit; cursor: pointer;
+    }
+    button:hover { background: rgb(255 255 255 / 20%); }
+    button:focus-visible { outline: 2px solid #cbd5e1; outline-offset: 4px; }
+    @media (prefers-reduced-motion: reduce) { .block, .glow { animation: none; } }
+  </style>
+</head>
+<body>
+  <div class="background" aria-hidden="true">
+    <div class="glow purple"></div>
+    <div class="glow blue"></div>
+    <div class="glow pink"></div>
+  </div>
+  <main>
+    <div id="skeleton" aria-hidden="true">
+      <div class="clock block"></div>
+      <div class="greeting block"></div>
+      <div class="engines">
+        <span class="block"></span><span class="block"></span>
+        <span class="block"></span><span class="block"></span>
+      </div>
+      <div class="search">
+        <div class="field block"></div>
+        <div class="submit block"></div>
+      </div>
+    </div>
+    <div class="offline-clock" role="timer" aria-label="Местное время">
+      <div class="digits">
+        <span id="hours"></span><span class="separator">:</span>
+        <span id="minutes"></span><span class="separator">:</span>
+        <span id="seconds"></span>
+      </div>
+      <div id="date"></div>
+    </div>
+    <p id="status" role="status">Открываем стартовую страницу…</p>
+    <button id="retry" type="button" hidden><span aria-hidden="true">↻</span>Попробовать снова</button>
+  </main>
+</body>
+</html>
