@@ -1,0 +1,57 @@
+#!/bin/sh
+set -eu
+root="$HOME/.local/share/fxtteam-new-tab"
+message() {
+    printf '%s\n' "$1"
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v zenity >/dev/null; then
+        zenity --info --title="FXT Team New Tab" --no-markup --text="$1" || :
+    fi
+}
+if ! command -v python3 >/dev/null; then
+    message 'Для установки нужен Python 3.'
+    exit 1
+fi
+if ! python3 - "$root" <<'PY'
+import base64
+import io
+import json
+import sys
+import tempfile
+import zipfile
+from pathlib import Path
+
+root = Path(sys.argv[1])
+root.parent.mkdir(parents=True, exist_ok=True)
+with tempfile.TemporaryDirectory(dir=root.parent) as staging:
+    bundle = Path(staging) / "bundle"
+    with zipfile.ZipFile(io.BytesIO(base64.b64decode("__BOOTSTRAP_BASE64__"))) as archive:
+        archive.extractall(bundle)
+    if root.exists():
+        for name in ("update/allowed_signers", "update/linux.py"):
+            if (root / name).read_bytes() != (bundle / name).read_bytes():
+                sys.exit("Existing installation differs. Rename the existing installation folder before retrying.")
+        if json.loads((root / "extension/manifest.json").read_text())["name"] != "FXT Team New Tab":
+            sys.exit("Unexpected existing folder.")
+    else:
+        bundle.rename(root)
+PY
+then
+    message "Не удалось установить расширение. Проверьте папку $root."
+    exit 1
+fi
+enable=no
+if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v zenity >/dev/null; then
+    if zenity --question --default-cancel --text='Включить ежедневные автообновления?'; then enable=yes; fi
+elif [ -t 0 ]; then
+    printf 'Включить ежедневные автообновления? [y/N] '
+    read -r answer || answer=''
+    case "$answer" in y|Y) enable=yes;; esac
+fi
+if [ "$enable" = yes ]; then
+    python3 "$root/update/linux.py" enable || message 'Не удалось включить автообновления. Вы можете продолжить установку в Chrome.'
+fi
+for chrome in google-chrome google-chrome-stable; do
+    if command -v "$chrome" >/dev/null; then "$chrome" 'chrome://extensions/' >/dev/null 2>&1 & break; fi
+done
+message "В Chrome откройте chrome://extensions, включите «Режим разработчика», нажмите «Загрузить распакованное расширение» и выберите папку:
+$root/extension"

@@ -10,6 +10,18 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 
+def build_installers(source, bootstrap, output):
+    data = base64.b64encode(bootstrap.read_bytes()).decode("ascii")
+    for name in ("install.cmd", "install.sh"):
+        template = (source / "installers" / (name + ".in")).read_text(encoding="utf-8")
+        script = template.replace("__BOOTSTRAP_BASE64__", data)
+        if name.endswith(".cmd"):
+            script = script.replace("\n", "\r\n")
+        installer = output / name
+        installer.write_bytes(script.encode("utf-8"))
+        installer.chmod(0o755)
+
+
 def build(source, repository, key, output):
     if not re.fullmatch(r"[\w-][\w.-]*/[\w-][\w.-]*", repository, re.ASCII):
         raise ValueError("Expected GitHub OWNER/REPO")
@@ -44,6 +56,7 @@ def build(source, repository, key, output):
             archive.write(source / "README.md", "README.md")
             archive.writestr("update/allowed_signers", signers)
             archive.writestr("update/repository.txt", repository + "\n")
+        build_installers(source, bootstrap, stage)
         for file in stage.iterdir():
             file.replace(output / file.name)
 

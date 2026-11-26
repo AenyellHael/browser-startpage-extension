@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FXT Team New Tab",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Открывает FXT Team при создании новой вкладки Chrome.",
   "host_permissions": ["https://homepage.fxtteam.ru/*"],
   "chrome_url_overrides": {
