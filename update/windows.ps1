@@ -1,4 +1,4 @@
-param([ValidateSet('Check','Enable','Disable','Status')][string]$Action = 'Status')
+param([ValidateSet('Check','Enable','Disable','Status','Register','Native')][string]$Action = 'Status')
 $ErrorActionPreference = 'Stop'
 $root = (Get-Item -LiteralPath $PSScriptRoot).Parent.FullName
 $live = Join-Path $root 'extension'
@@ -34,19 +34,31 @@ function Assert-Signature($archive, $signature, $signers, $keygen) {
     $info.Arguments = '-Y verify -I fxt-release -n fxtteam-chrome -f "' + $signers + '" -s "' + $signature + '"'
     $info.UseShellExecute = $false
     $info.RedirectStandardInput = $true
+    $info.RedirectStandardOutput = $true
     $info.CreateNoWindow = $true
-    $proc = [Diagnostics.Process]::Start($info)
+    # Windows PowerShell initializes redirected stdin with the console encoding.
+    # Its StreamWriter must not prepend a BOM to the signed binary payload.
+    $encoding = [Console]::InputEncoding
+    if ($encoding.GetPreamble().Length) {
+        try {
+            [Console]::InputEncoding = New-Object Text.UTF8Encoding($false)
+            $proc = [Diagnostics.Process]::Start($info)
+        } finally { [Console]::InputEncoding = $encoding }
+    } else {
+        $proc = [Diagnostics.Process]::Start($info)
+    }
     $file = [IO.File]::OpenRead($archive)
     try {
         try { $file.CopyTo($proc.StandardInput.BaseStream) }
         catch [IO.IOException] { if (!$proc.HasExited) { throw } }
         finally { $proc.StandardInput.Close() }
+        $null = $proc.StandardOutput.ReadToEnd()
         $proc.WaitForExit()
         if ($proc.ExitCode -ne 0) { throw 'Invalid release signature.' }
     } finally { $file.Dispose(); $proc.Dispose() }
 }
 
-function Update-Extension {
+function Update-Extension([switch]$Preview) {
     $repo = Get-Repository
     $signers = (Get-Item -LiteralPath (Join-Path $PSScriptRoot 'allowed_signers')).FullName
     $keygen = (Get-Command ssh-keygen.exe -CommandType Application | Select-Object -First 1).Source
@@ -69,6 +81,10 @@ function Update-Extension {
         $candidate = Join-Path $stage 'candidate'
         Expand-Archive -LiteralPath $zip -DestinationPath $candidate
         $next = Get-ReleaseVersion $candidate
+        if ($Preview) {
+            $folder = if ($next -gt $installed) { $candidate } else { $live }
+            return (Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $folder 'manifest.json') | ConvertFrom-Json).version
+        }
         if ($next -le $installed) { Write-Output "Up to date ($installed)."; return }
         [IO.Directory]::Move($live,$backup)
         try { [IO.Directory]::Move($candidate,$live) }
@@ -82,6 +98,48 @@ function Update-Extension {
 }
 
 switch ($Action) {
+    'Register' {
+        $path = [IO.Path]::GetFullPath($live)
+        $path = $path.Substring(0,1).ToUpperInvariant() + $path.Substring(1)
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { $hash = $sha.ComputeHash([Text.Encoding]::Unicode.GetBytes($path)) }
+        finally { $sha.Dispose() }
+        $id = -join ($hash[0..15] | ForEach-Object {
+            [char](97 + ($_ -shr 4)); [char](97 + ($_ -band 15))
+        })
+        $hostName = 'ru.fxtteam.newtab_update'
+        $hostFile = Join-Path $PSScriptRoot 'native.json'
+        $config = @{name=$hostName; description='FXT Team signed release updater'; type='stdio';
+                    path=(Join-Path $PSScriptRoot 'native.cmd'); allowed_origins=@("chrome-extension://$id/")}
+        [IO.File]::WriteAllText($hostFile, ($config | ConvertTo-Json))
+        $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Software\Google\Chrome\NativeMessagingHosts\$hostName")
+        try { $key.SetValue('', $hostFile) } finally { $key.Dispose() }
+    }
+    'Native' {
+        $reader = New-Object IO.BinaryReader ([Console]::OpenStandardInput())
+        $writer = New-Object IO.BinaryWriter ([Console]::OpenStandardOutput())
+        try {
+            $length = $reader.ReadUInt32()
+            if ($length -gt 1024 -or !$length) { return }
+            $message = [Text.Encoding]::UTF8.GetString($reader.ReadBytes($length)) | ConvertFrom-Json
+            switch -CaseSensitive ($message.action) {
+                'inspect' { $number = Update-Extension -Preview }
+                'apply' {
+                    $null = Update-Extension
+                    $number = (Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $live 'manifest.json') | ConvertFrom-Json).version
+                }
+                default { throw 'Unknown action.' }
+            }
+            $reply = @{version=$number}
+        } catch {
+            [Console]::Error.WriteLine($_.Exception.Message)
+            $reply = @{error='update'}
+        }
+        $bytes = [Text.Encoding]::UTF8.GetBytes(($reply | ConvertTo-Json -Compress))
+        $writer.Write([uint32]$bytes.Length)
+        $writer.Write($bytes)
+        $writer.Flush()
+    }
     'Check' { Update-Extension }
     'Enable' {
         Update-Extension

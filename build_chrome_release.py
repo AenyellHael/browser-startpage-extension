@@ -12,21 +12,29 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 def build_installers(source, bootstrap, output):
     data = base64.b64encode(bootstrap.read_bytes()).decode("ascii")
-    for name in ("install.cmd", "install.sh"):
+    for name, platform in (("install.cmd", "Windows"), ("install.sh", "Linux")):
         template = (source / "installers" / (name + ".in")).read_text(encoding="utf-8")
         script = template.replace("__BOOTSTRAP_BASE64__", data)
         if name.endswith(".cmd"):
             script = script.replace("\n", "\r\n")
-        installer = output / name
+        installer = output / f"install_FXT-Team-New-Tab_{platform}{Path(name).suffix}"
         installer.write_bytes(script.encode("utf-8"))
         installer.chmod(0o755)
+    for platform, suffix in (("Windows", ".cmd"), ("Linux", ".sh")):
+        name = f"uninstall_FXT-Team-New-Tab_{platform}{suffix}"
+        text = (source / "installers" / name).read_text(encoding="utf-8")
+        if suffix == ".cmd":
+            text = text.replace("\n", "\r\n")
+        (output / name).write_bytes(text.encode("utf-8"))
+        (output / name).chmod(0o755)
 
 
 def build(source, repository, key, output):
     if not re.fullmatch(r"[\w-][\w.-]*/[\w-][\w.-]*", repository, re.ASCII):
         raise ValueError("Expected GitHub OWNER/REPO")
     manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
-    files = ["manifest.json", "newtab.html", "newtab.js", *sorted(set(manifest["icons"].values()))]
+    files = ["manifest.json", "newtab.html", "newtab.js", "popup.html", "popup.js",
+             "manual-update.js", *sorted(set(manifest["icons"].values()))]
     version = manifest["version"]
     if not re.fullmatch(r"\d+(\.\d+){1,3}", version, re.ASCII):
         raise ValueError("Expected a numeric Chrome version")
@@ -51,7 +59,7 @@ def build(source, repository, key, output):
         with ZipFile(bootstrap, "w", ZIP_DEFLATED) as archive:
             for name in files:
                 archive.write(source / name, "extension/" + name)
-            for name in ("windows.ps1", "linux.py"):
+            for name in ("windows.ps1", "linux.py", "native.cmd", "setup.ps1", "open-extensions.ps1"):
                 archive.write(source / "update" / name, "update/" + name)
             archive.write(source / "README.md", "README.md")
             archive.writestr("update/allowed_signers", signers)

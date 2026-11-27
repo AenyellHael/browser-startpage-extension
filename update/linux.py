@@ -3,13 +3,16 @@
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import struct
 import tempfile
+from contextlib import redirect_stdout
 from pathlib import Path
 from urllib.request import urlopen
 from zipfile import ZipFile
@@ -17,6 +20,7 @@ from zipfile import ZipFile
 TOOLS = Path(__file__).resolve().parent
 ROOT = TOOLS.parent
 UNIT = "fxtteam-chrome-update"
+HOST = "ru.fxtteam.newtab_update"
 
 
 def version(folder):
@@ -29,7 +33,7 @@ def version(folder):
     return tuple((list(map(int, number.split("."))) + [0, 0])[:4])
 
 
-def check():
+def check(preview=False):
     repo = (TOOLS / "repository.txt").read_text().strip()
     if not re.fullmatch(r"[\w-][\w.-]*/[\w-][\w.-]*", repo, re.ASCII):
         raise ValueError("Invalid repository.txt")
@@ -53,11 +57,14 @@ def check():
             with archive.open("rb") as package:
                 subprocess.run(["ssh-keygen", "-Y", "verify", "-I", "fxt-release",
                                 "-n", "fxtteam-chrome", "-f", str(TOOLS / "allowed_signers"),
-                                "-s", str(signature)], stdin=package, check=True)
+                                "-s", str(signature)], stdin=package, stdout=subprocess.DEVNULL, check=True)
             candidate = stage / "candidate"
             with ZipFile(archive) as package:
                 package.extractall(candidate)
             next_version = version(candidate)
+            if preview:
+                folder = candidate if next_version > installed else live
+                return json.loads((folder / "manifest.json").read_text())["version"]
             if next_version <= installed:
                 print("Already up to date.")
                 return
@@ -94,7 +101,19 @@ def write_unit(path, content):
 def main(action):
     units = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd/user"
     service, timer = (units / (UNIT + suffix) for suffix in (".service", ".timer"))
-    if action == "check":
+    if action == "register":
+        directory = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "google-chrome/NativeMessagingHosts"
+        directory.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(os.fsencode((ROOT / "extension").resolve())).hexdigest()[:32]
+        extension_id = digest.translate(str.maketrans("0123456789abcdef", "abcdefghijklmnop"))
+        script = TOOLS / "linux.py"
+        script.chmod(0o755)
+        write_unit(directory / (HOST + ".json"), json.dumps({
+            "name": HOST, "description": "FXT Team signed release updater",
+            "path": str(script), "type": "stdio",
+            "allowed_origins": [f"chrome-extension://{extension_id}/"],
+        }))
+    elif action == "check":
         check()
     elif action == "enable":
         check()
@@ -118,9 +137,38 @@ def main(action):
         systemctl("list-timers", "--all", timer.name)
 
 
+def native():
+    header = sys.stdin.buffer.read(4)
+    if len(header) != 4:
+        return
+    length, = struct.unpack("=I", header)
+    if not 0 < length <= 1024:
+        return
+    try:
+        action = json.loads(sys.stdin.buffer.read(length))["action"]
+        with redirect_stdout(sys.stderr):
+            if action == "inspect":
+                number = check(preview=True)
+            elif action == "apply":
+                check()
+                number = json.loads((ROOT / "extension/manifest.json").read_text())["version"]
+            else:
+                raise ValueError("Invalid action")
+        reply = {"version": number}
+    except Exception as error:
+        print(error, file=sys.stderr)
+        reply = {"error": "update"}
+    data = json.dumps(reply).encode()
+    sys.stdout.buffer.write(struct.pack("=I", len(data)) + data)
+    sys.stdout.buffer.flush()
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1].startswith("chrome-extension://"):
+        native()
+        sys.exit()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("check", "enable", "disable", "status"))
+    parser.add_argument("action", choices=("check", "enable", "disable", "status", "register"))
     try:
         main(parser.parse_args().action)
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:

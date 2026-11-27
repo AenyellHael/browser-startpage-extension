@@ -13,6 +13,7 @@ if ! command -v python3 >/dev/null; then
 fi
 if ! python3 - "$root" <<'PY'
 import base64
+import fcntl
 import io
 import json
 import sys
@@ -27,11 +28,29 @@ with tempfile.TemporaryDirectory(dir=root.parent) as staging:
     with zipfile.ZipFile(io.BytesIO(base64.b64decode("__BOOTSTRAP_BASE64__"))) as archive:
         archive.extractall(bundle)
     if root.exists():
-        for name in ("update/allowed_signers", "update/linux.py"):
-            if (root / name).read_bytes() != (bundle / name).read_bytes():
-                sys.exit("Existing installation differs. Rename the existing installation folder before retrying.")
-        if json.loads((root / "extension/manifest.json").read_text())["name"] != "FXT Team New Tab":
-            sys.exit("Unexpected existing folder.")
+        if (root / "update/allowed_signers").read_bytes() != (bundle / "update/allowed_signers").read_bytes():
+            sys.exit("Release signing key differs.")
+        with (root / ".fxt-lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            live = root / "extension"
+            backup = root / ".fxt-previous"
+            if not live.exists() and backup.exists():
+                backup.rename(live)
+            installed = json.loads((live / "manifest.json").read_text())
+            next_manifest = json.loads((bundle / "extension/manifest.json").read_text())
+            current = tuple(map(int, installed["version"].split(".")))
+            offered = tuple(map(int, next_manifest["version"].split(".")))
+            if installed["name"] != next_manifest["name"] or current > offered:
+                sys.exit("Use the latest FXT Team New Tab installer.")
+            (bundle / "update/linux.py").replace(root / "update/linux.py")
+            if current < offered:
+                live.rename(backup)
+                try:
+                    (bundle / "extension").rename(live)
+                except OSError:
+                    backup.rename(live)
+                    raise
+                backup.rename(bundle / "old-extension")
     else:
         bundle.rename(root)
 PY
@@ -39,6 +58,7 @@ then
     message "Не удалось установить расширение. Проверьте папку $root."
     exit 1
 fi
+python3 "$root/update/linux.py" register
 enable=no
 if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v zenity >/dev/null; then
     if zenity --question --default-cancel --text='Включить ежедневные автообновления?'; then enable=yes; fi
@@ -50,8 +70,68 @@ fi
 if [ "$enable" = yes ]; then
     python3 "$root/update/linux.py" enable || message 'Не удалось включить автообновления. Вы можете продолжить установку в Chrome.'
 fi
-for chrome in google-chrome google-chrome-stable; do
-    if command -v "$chrome" >/dev/null; then "$chrome" 'chrome://extensions/' >/dev/null 2>&1 & break; fi
-done
+python3 -c '
+import html, json, os, shutil, subprocess, sys, time, uuid
+from pathlib import Path
+chrome = shutil.which("google-chrome") or shutil.which("google-chrome-stable")
+if not chrome:
+    sys.exit(1)
+config = os.environ.get("CHROME_CONFIG_HOME") or os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
+data = Path(os.environ.get("CHROME_USER_DATA_DIR") or Path(config) / "google-chrome")
+state = data / "Local State"
+cache = json.loads(state.read_text()).get("profile", {}).get("info_cache", {}) if state.exists() else {}
+profiles = [(key, entry.get("name") or key) for key, entry in sorted(cache.items())
+            if key not in ("", ".", "..", "Guest Profile", "System Profile")
+            and "/" not in key and (data / key).is_dir()]
+key = profiles[0][0] if profiles else "Default"
+if len(profiles) > 1:
+    labels = [f"{name} ({directory})" for directory, name in profiles]
+    if (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")) and shutil.which("zenity"):
+        rows = [value for i, label in enumerate(labels, 1) for value in (str(i), label)]
+        pick = subprocess.run(["zenity", "--list", "--title=Выберите профиль Chrome",
+                               "--column=№", "--column=Профиль", "--print-column=1", "--", *rows],
+                              stdout=subprocess.PIPE, text=True)
+        if pick.returncode:
+            sys.exit(0)
+        index = int(pick.stdout.strip())
+    elif sys.stdin.isatty():
+        for i, label in enumerate(labels, 1):
+            print(f"{i}. {label}")
+        while True:
+            answer = input("Номер профиля Chrome (Enter — пропустить): ").strip()
+            if not answer:
+                sys.exit(0)
+            if answer.isascii() and answer.isdigit() and 1 <= int(answer) <= len(profiles):
+                index = int(answer)
+                break
+    else:
+        sys.exit(1)
+    key = profiles[index - 1][0]
+target = "chrome://extensions/"
+xdotool = shutil.which("xdotool") if os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY") else None
+if xdotool:
+    title = "FXT Team New Tab " + uuid.uuid4().hex
+    guide = Path.home() / ".local/share/fxtteam-new-tab/update/install-help.html"
+    folder = html.escape(str(guide.parent.parent / "extension"))
+    guide.write_text(f"<!doctype html><meta charset=utf-8><title>{title}</title><h1>FXT Team New Tab</h1><p>Откройте chrome://extensions/ в адресной строке, включите режим разработчика и загрузите папку <code>{folder}</code>.</p>", encoding="utf-8")
+    target = guide.as_uri()
+subprocess.Popen([chrome, "--profile-directory=" + key, "--new-window", target],
+                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                 start_new_session=True)
+if xdotool:
+    def query(*args):
+        return subprocess.run([xdotool, *args], capture_output=True, text=True).stdout.strip()
+    deadline = time.monotonic() + 12
+    while time.monotonic() < deadline:
+        window = query("getactivewindow")
+        if window.isdigit() and query("getwindowname", window).startswith(title):
+            subprocess.run([xdotool, "key", "--window", window, "ctrl+l"], check=True)
+            time.sleep(0.15)
+            if query("getactivewindow") == window:
+                subprocess.run([xdotool, "type", "--window", window, "chrome://extensions/"], check=True)
+                subprocess.run([xdotool, "key", "--window", window, "Return"], check=True)
+            break
+        time.sleep(0.15)
+' || printf '%s\n' 'Откройте chrome://extensions/ вручную в нужном профиле Chrome.'
 message "В Chrome откройте chrome://extensions, включите «Режим разработчика», нажмите «Загрузить распакованное расширение» и выберите папку:
 $root/extension"

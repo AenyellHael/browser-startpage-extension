@@ -4,14 +4,13 @@ chcp 65001 >nul
 set "FXT_INSTALLER=%~f0"
 set "FXT_ROOT=%LOCALAPPDATA%\FXTTeam\NewTab"
 set "FXT_PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
-"%FXT_PS%" -NoProfile -Command ^
+"%FXT_PS%" -NoProfile -ExecutionPolicy RemoteSigned -Command ^
   "$ErrorActionPreference='Stop';" ^
   "$root=$env:FXT_ROOT; $parent=Split-Path $root; [void][IO.Directory]::CreateDirectory($parent);" ^
   "$stage=Join-Path $parent ([guid]::NewGuid().ToString()); [void][IO.Directory]::CreateDirectory($stage);" ^
   "try { $zip=Join-Path $stage 'bundle.zip'; $data=[IO.File]::ReadAllLines($env:FXT_INSTALLER)[-1]; [IO.File]::WriteAllBytes($zip,[Convert]::FromBase64String($data));" ^
   "$bundle=Join-Path $stage 'bundle'; Expand-Archive -LiteralPath $zip -DestinationPath $bundle;" ^
-  "if ([IO.Directory]::Exists($root)) { foreach ($name in 'update/allowed_signers','update/windows.ps1') { if ((Get-FileHash -LiteralPath (Join-Path $root $name)).Hash -ne (Get-FileHash -LiteralPath (Join-Path $bundle $name)).Hash) { throw 'Existing installation differs. Rename the existing installation folder before retrying.' } }; $manifest=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'extension/manifest.json') | ConvertFrom-Json; if ($manifest.name -ne 'FXT Team New Tab') { throw 'Unexpected existing folder.' } }" ^
-  "else { [IO.Directory]::Move($bundle,$root) } } finally { $dir=Get-Item -LiteralPath $stage; if ($dir.Parent.FullName -eq $parent -and $dir.Name -match '^[0-9a-f-]{36}$') { Remove-Item -LiteralPath $dir.FullName -Recurse -Force } }"
+  "& (Join-Path $bundle 'update/setup.ps1') -Destination $root } finally { $dir=Get-Item -LiteralPath $stage; if ($dir.Parent.FullName -eq $parent -and $dir.Name -match '^[0-9a-f-]{36}$') { Remove-Item -LiteralPath $dir.FullName -Recurse -Force } }"
 if errorlevel 1 goto failed
 echo.
 choice /C YN /N /M "Enable daily automatic updates? [Y/N] "
@@ -23,7 +22,8 @@ echo.
 echo In Chrome open chrome://extensions, enable Developer mode,
 echo click "Load unpacked" and select:
 echo "%FXT_ROOT%\extension"
-"%FXT_PS%" -NoProfile -Command "foreach ($base in $env:LOCALAPPDATA,$env:ProgramFiles,${env:ProgramFiles(x86)}) { if ($base) { $exe=Join-Path $base 'Google/Chrome/Application/chrome.exe'; if (Test-Path -LiteralPath $exe) { Start-Process -FilePath $exe -ArgumentList 'chrome://extensions/'; break } } }"
+"%FXT_PS%" -NoProfile -ExecutionPolicy RemoteSigned -File "%FXT_ROOT%\update\open-extensions.ps1"
+if errorlevel 1 echo Open chrome://extensions/ manually in your Chrome profile.
 pause
 exit /b 0
 :failed
