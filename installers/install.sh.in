@@ -8,10 +8,14 @@ message() {
     fi
 }
 if ! command -v python3 >/dev/null; then
-    message 'Для установки нужен Python 3.'
+    message 'Команда python3 не найдена. Установите Python 3.8 или новее через менеджер пакетов вашей системы и повторите запуск.'
     exit 1
 fi
-if ! python3 - "$root" <<'PY'
+if ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 8))'; then
+    message "Установлен $(python3 --version). Нужен Python 3.8 или новее. Обновите пакет python3 и повторите установку."
+    exit 1
+fi
+if ! reason=$(python3 - "$root" 2>&1 <<'PY'
 import base64
 import fcntl
 import io
@@ -22,6 +26,16 @@ import zipfile
 from pathlib import Path
 
 root = Path(sys.argv[1])
+def report_error(kind, error, trace):
+    if isinstance(error, PermissionError):
+        print(f"Нет доступа к {error.filename or root}. Проверьте права записи для своего пользователя.")
+    elif isinstance(error, (zipfile.BadZipFile, ValueError)) and not isinstance(error, json.JSONDecodeError):
+        print(f"Не удалось прочитать пакет. Скачайте установщик заново. {error}")
+    elif isinstance(error, BlockingIOError):
+        print("Обновление уже выполняется. Дождитесь его завершения и запустите установщик снова.")
+    else:
+        print(str(error))
+sys.excepthook = report_error
 root.parent.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(dir=root.parent) as staging:
     bundle = Path(staging) / "bundle"
@@ -29,7 +43,7 @@ with tempfile.TemporaryDirectory(dir=root.parent) as staging:
         archive.extractall(bundle)
     if root.exists():
         if (root / "update/allowed_signers").read_bytes() != (bundle / "update/allowed_signers").read_bytes():
-            sys.exit("Release signing key differs.")
+            sys.exit("Ключ подписи отличается от установленного. Проверьте, что установщик скачан из официального релиза FXT Team.")
         with (root / ".fxt-lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             live = root / "extension"
@@ -41,7 +55,7 @@ with tempfile.TemporaryDirectory(dir=root.parent) as staging:
             current = tuple(map(int, installed["version"].split(".")))
             offered = tuple(map(int, next_manifest["version"].split(".")))
             if installed["name"] != next_manifest["name"] or current > offered:
-                sys.exit("Use the latest FXT Team New Tab installer.")
+                sys.exit("В папке другое расширение или более новая версия. Скачайте последний установщик FXT Team из GitHub Releases.")
             (bundle / "update/linux.py").replace(root / "update/linux.py")
             if current < offered:
                 live.rename(backup)
@@ -54,28 +68,49 @@ with tempfile.TemporaryDirectory(dir=root.parent) as staging:
     else:
         bundle.rename(root)
 PY
+)
 then
-    message "Не удалось установить расширение. Проверьте папку $root."
+    message "Не удалось установить расширение в $root.
+$reason"
     exit 1
 fi
-python3 "$root/update/linux.py" register
+if ! reason=$(python3 "$root/update/linux.py" register 2>&1); then
+    message "Файлы установлены. Кнопка обновления в Chrome пока недоступна. Проверьте права записи в папку настроек Chrome и повторите установку.
+$reason"
+fi
+if ! command -v ssh-keygen >/dev/null; then
+    message 'Для обновлений нужен клиент OpenSSH с командой ssh-keygen. В Ubuntu/Debian это пакет openssh-client, в Fedora — openssh-clients. Стартовая страница работает без него.'
+fi
 enable=no
 if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v zenity >/dev/null; then
     if zenity --question --default-cancel --text='Включить ежедневные автообновления?'; then enable=yes; fi
 elif [ -t 0 ]; then
-    printf 'Включить ежедневные автообновления? [y/N] '
-    read -r answer || answer=''
-    case "$answer" in y|Y) enable=yes;; esac
+    while :; do
+        printf 'Включить ежедневные обновления? 1 — Да, 2 — Нет (Enter — пропустить): '
+        read -r answer || answer=''
+        case "$(python3 -c 'import sys; print(sys.argv[1].strip().casefold())' "$answer")" in
+            1|д|да|y|yes|lf|нуы) enable=yes; break;;
+            ''|2|нет|n|no|т|тщ|ytn) break;;
+            *) printf '%s\n' 'Введите 1 или 2 и нажмите Enter.';;
+        esac
+    done
 fi
 if [ "$enable" = yes ]; then
-    python3 "$root/update/linux.py" enable || message 'Не удалось включить автообновления. Вы можете продолжить установку в Chrome.'
+    if ! reason=$(python3 "$root/update/linux.py" enable 2>&1); then
+        message "Файлы расширения готовы. Не удалось включить ежедневные обновления:
+$reason"
+    fi
+fi
+if ! command -v google-chrome >/dev/null && ! command -v google-chrome-stable >/dev/null; then
+    message "Файлы расширения готовы, но команда Google Chrome не найдена. Если браузер установлен в другом месте, откройте chrome://extensions/ вручную. Иначе установите Google Chrome. Для подключения выберите папку $root/extension."
+    exit 0
 fi
 python3 -c '
 import html, json, os, shutil, subprocess, sys, time, uuid
 from pathlib import Path
 chrome = shutil.which("google-chrome") or shutil.which("google-chrome-stable")
 if not chrome:
-    sys.exit(1)
+    sys.exit("Команда google-chrome или google-chrome-stable не найдена. Если Chrome уже установлен, откройте его сами. Иначе установите Google Chrome и повторите запуск.")
 config = os.environ.get("CHROME_CONFIG_HOME") or os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
 data = Path(os.environ.get("CHROME_USER_DATA_DIR") or Path(config) / "google-chrome")
 state = data / "Local State"

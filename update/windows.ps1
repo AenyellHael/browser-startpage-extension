@@ -1,4 +1,4 @@
-param([ValidateSet('Check','Enable','Disable','Status','Register','Native')][string]$Action = 'Status')
+﻿param([ValidateSet('Check','Enable','Disable','Status','Register','Native','Ask')][string]$Action = 'Status')
 $ErrorActionPreference = 'Stop'
 $root = (Get-Item -LiteralPath $PSScriptRoot).Parent.FullName
 $live = Join-Path $root 'extension'
@@ -35,6 +35,7 @@ function Assert-Signature($archive, $signature, $signers, $keygen) {
     $info.UseShellExecute = $false
     $info.RedirectStandardInput = $true
     $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
     $info.CreateNoWindow = $true
     # Windows PowerShell initializes redirected stdin with the console encoding.
     # Its StreamWriter must not prepend a BOM to the signed binary payload.
@@ -47,21 +48,31 @@ function Assert-Signature($archive, $signature, $signers, $keygen) {
     } else {
         $proc = [Diagnostics.Process]::Start($info)
     }
+    $stdout = $proc.StandardOutput.ReadToEndAsync()
+    $stderr = $proc.StandardError.ReadToEndAsync()
     $file = [IO.File]::OpenRead($archive)
     try {
+        $pipeError = $null
         try { $file.CopyTo($proc.StandardInput.BaseStream) }
-        catch [IO.IOException] { if (!$proc.HasExited) { throw } }
+        catch [IO.IOException] { $pipeError = $_ }
         finally { $proc.StandardInput.Close() }
-        $null = $proc.StandardOutput.ReadToEnd()
         $proc.WaitForExit()
-        if ($proc.ExitCode -ne 0) { throw 'Invalid release signature.' }
+        if ($proc.ExitCode -ne 0) {
+            $detail = ($stderr.Result.Trim() + ' ' + $stdout.Result.Trim()).Trim()
+            if ($detail -match '(?i)(unknown|illegal|invalid|unrecognized) option[^\r\n]*\bY\b|unsupported operation for -Y') {
+                throw "Клиент OpenSSH '$keygen' не поддерживает проверку подписи (-Y verify). Обновите «Клиент OpenSSH» и повторите запуск."
+            }
+            throw "Не удалось подтвердить подпись с помощью '$keygen' (код $($proc.ExitCode)). $detail"
+        }
+        if ($pipeError) { throw $pipeError }
     } finally { $file.Dispose(); $proc.Dispose() }
 }
 
 function Update-Extension([switch]$Preview) {
     $repo = Get-Repository
     $signers = (Get-Item -LiteralPath (Join-Path $PSScriptRoot 'allowed_signers')).FullName
-    $keygen = (Get-Command ssh-keygen.exe -CommandType Application | Select-Object -First 1).Source
+    $keygen = (Get-Command ssh-keygen.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+    if (!$keygen) { throw 'Не найден ssh-keygen.exe. Для обновлений добавьте «Клиент OpenSSH» в дополнительных компонентах Windows и снова запустите установщик.' }
     $stage = Join-Path $root '.fxt-stage'
     $lock = [IO.File]::Open((Join-Path $root '.fxt-lock'), 'OpenOrCreate','Write','None')
     try {
@@ -75,8 +86,10 @@ function Update-Extension([switch]$Preview) {
         $zip = Join-Path $stage 'chrome-extension.zip'
         $url = "https://github.com/$repo/releases/latest/download/chrome-extension.zip"
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Uri $url -OutFile $zip
-        Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Uri "$url.sig" -OutFile "$zip.sig"
+        foreach ($suffix in '', '.sig') {
+            try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Uri "$url$suffix" -OutFile "$zip$suffix" }
+            catch { throw "Не удалось скачать $url$suffix. Проверьте доступ к ссылке на GitHub. $($_.Exception.Message)" }
+        }
         Assert-Signature $zip "$zip.sig" $signers $keygen
         $candidate = Join-Path $stage 'candidate'
         Expand-Archive -LiteralPath $zip -DestinationPath $candidate
@@ -98,6 +111,16 @@ function Update-Extension([switch]$Preview) {
 }
 
 switch ($Action) {
+    'Ask' {
+        if ([Console]::IsInputRedirected) { [Console]::InputEncoding = New-Object Text.UTF8Encoding($false) }
+        while ($true) {
+            Write-Host 'Включить ежедневные обновления? 1 — Да, 2 — Нет (Enter — пропустить): ' -NoNewline
+            $answer = ([string][Console]::ReadLine()).Trim().ToLowerInvariant()
+            if ($answer -in '1','да','д','y','yes','нуы','lf') { exit 0 }
+            if ($answer -in '','2','нет','n','no','т','тщ','ytn') { exit 2 }
+            Write-Host 'Введите 1 или 2 и нажмите Enter.'
+        }
+    }
     'Register' {
         $path = [IO.Path]::GetFullPath($live)
         $path = $path.Substring(0,1).ToUpperInvariant() + $path.Substring(1)
@@ -142,13 +165,20 @@ switch ($Action) {
     }
     'Check' { Update-Extension }
     'Enable' {
+        foreach ($cmd in 'Register-ScheduledTask','New-ScheduledTaskAction','New-ScheduledTaskTrigger','New-ScheduledTaskSettingsSet','New-ScheduledTaskPrincipal') {
+            if (!(Get-Command $cmd -ErrorAction SilentlyContinue)) { throw "Для расписания требуется модуль Windows ScheduledTasks. Недоступна команда $cmd. Можно обновлять расширение вручную." }
+        }
+        if ((Get-Service -Name Schedule -ErrorAction SilentlyContinue).Status -ne 'Running') {
+            throw 'Служба «Планировщик заданий» (Schedule) недоступна или остановлена. Для расписания обратитесь к администратору Windows.'
+        }
         Update-Extension
         $run = New-ScheduledTaskAction -Execute (Join-Path $PSHOME 'powershell.exe') -Argument (
             '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy RemoteSigned -File "' + $PSCommandPath + '" -Action Check')
         $when = New-ScheduledTaskTrigger -Daily -At '12:00'
         $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
         $principal = New-ScheduledTaskPrincipal -UserId $identity.Name -LogonType Interactive -RunLevel Limited
-        Register-ScheduledTask -TaskName $taskName -Action $run -Trigger $when -Settings $settings -Principal $principal -Force | Out-Null
+        try { Register-ScheduledTask -TaskName $taskName -Action $run -Trigger $when -Settings $settings -Principal $principal -Force | Out-Null }
+        catch { throw "Планировщик не смог сохранить задание для текущего пользователя. Проверьте разрешение на создание заданий. $($_.Exception.Message)" }
         Write-Output "Enabled: $taskName"
     }
     'Disable' {

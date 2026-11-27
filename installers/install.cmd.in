@@ -4,30 +4,34 @@ chcp 65001 >nul
 set "FXT_INSTALLER=%~f0"
 set "FXT_ROOT=%LOCALAPPDATA%\FXTTeam\NewTab"
 set "FXT_PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+if not exist "%FXT_PS%" (
+  echo Для распаковки нужен Windows PowerShell 5.1. Включите этот компонент Windows и снова запустите установщик.
+  goto failed
+)
 "%FXT_PS%" -NoProfile -ExecutionPolicy RemoteSigned -Command ^
-  "$ErrorActionPreference='Stop';" ^
+  "$ErrorActionPreference='Stop'; $step='Проверка Windows PowerShell'; try { if ($PSVersionTable.PSVersion -lt [version]'5.1' -or !(Get-Command Expand-Archive -ErrorAction SilentlyContinue)) { throw 'Нужны Windows PowerShell 5.1 и команда Expand-Archive из модуля Microsoft.PowerShell.Archive.' }; $step='Создание папки установки. Проверьте свободное место и право записи в '+$env:FXT_ROOT;" ^
   "$root=$env:FXT_ROOT; $parent=Split-Path $root; [void][IO.Directory]::CreateDirectory($parent);" ^
   "$stage=Join-Path $parent ([guid]::NewGuid().ToString()); [void][IO.Directory]::CreateDirectory($stage);" ^
-  "try { $zip=Join-Path $stage 'bundle.zip'; $data=[IO.File]::ReadAllLines($env:FXT_INSTALLER)[-1]; [IO.File]::WriteAllBytes($zip,[Convert]::FromBase64String($data));" ^
+  "try { $step='Распаковка. При повреждении файла скачайте установщик заново из GitHub Releases'; $zip=Join-Path $stage 'bundle.zip'; $data=[IO.File]::ReadAllLines($env:FXT_INSTALLER)[-1]; [IO.File]::WriteAllBytes($zip,[Convert]::FromBase64String($data));" ^
   "$bundle=Join-Path $stage 'bundle'; Expand-Archive -LiteralPath $zip -DestinationPath $bundle;" ^
-  "& (Join-Path $bundle 'update/setup.ps1') -Destination $root } finally { $dir=Get-Item -LiteralPath $stage; if ($dir.Parent.FullName -eq $parent -and $dir.Name -match '^[0-9a-f-]{36}$') { Remove-Item -LiteralPath $dir.FullName -Recurse -Force } }"
+  "$step='Установка файлов в '+$root; & (Join-Path $bundle 'update/setup.ps1') -Destination $root } finally { $dir=Get-Item -LiteralPath $stage; if ($dir.Parent.FullName -eq $parent -and $dir.Name -match '^[0-9a-f-]{36}$') { Remove-Item -LiteralPath $dir.FullName -Recurse -Force } } } catch { Write-Host $step; Write-Host $_.Exception.Message; exit 1 }"
 if errorlevel 1 goto failed
 echo.
-choice /C YN /N /M "Enable daily automatic updates? [Y/N] "
-if errorlevel 2 goto browser
-if errorlevel 1 "%FXT_PS%" -NoProfile -ExecutionPolicy RemoteSigned -File "%FXT_ROOT%\update\windows.ps1" -Action Enable
-if errorlevel 1 echo Automatic updates could not be enabled. You can still load the extension in Chrome.
+"%FXT_PS%" -NoProfile -ExecutionPolicy RemoteSigned -File "%FXT_ROOT%\update\windows.ps1" -Action Ask
+if errorlevel 1 goto browser
+"%FXT_PS%" -NoProfile -ExecutionPolicy RemoteSigned -File "%FXT_ROOT%\update\windows.ps1" -Action Enable
+if errorlevel 1 echo Автообновления включить не удалось. Файлы расширения готовы. После устранения причины запустите установщик ещё раз.
 :browser
 echo.
-echo In Chrome open chrome://extensions, enable Developer mode,
-echo click "Load unpacked" and select:
+echo В Chrome откройте chrome://extensions, включите «Режим разработчика»,
+echo нажмите «Загрузить распакованное расширение» и выберите папку:
 echo "%FXT_ROOT%\extension"
 "%FXT_PS%" -NoProfile -ExecutionPolicy RemoteSigned -File "%FXT_ROOT%\update\open-extensions.ps1"
-if errorlevel 1 echo Open chrome://extensions/ manually in your Chrome profile.
+if errorlevel 1 echo Если Chrome установлен, откройте chrome://extensions/ вручную в нужном профиле.
 pause
 exit /b 0
 :failed
-echo Installation could not be completed.
+echo Установка прервана. Причина указана выше.
 pause
 exit /b 1
 __BOOTSTRAP_BASE64__

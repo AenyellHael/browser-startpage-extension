@@ -6,8 +6,8 @@
 
 1. Скачайте и запустите установщик для своей системы.
    - **Windows** — дважды щёлкните по скачанному файлу [install_FXT-Team-New-Tab_Windows.cmd](https://github.com/AenyellHael/browser-startpage-extension/releases/latest/download/install_FXT-Team-New-Tab_Windows.cmd).
-   - **Linux** — скачайте [install_FXT-Team-New-Tab_Linux.sh](https://github.com/AenyellHael/browser-startpage-extension/releases/latest/download/install_FXT-Team-New-Tab_Linux.sh) и выполните `sh ./install_FXT-Team-New-Tab_Linux.sh` в папке загрузки. Понадобится Python 3.
-2. Когда установщик предложит ежедневные автообновления, выберите **Да** или **Нет**.
+   - **Linux** — скачайте [install_FXT-Team-New-Tab_Linux.sh](https://github.com/AenyellHael/browser-startpage-extension/releases/latest/download/install_FXT-Team-New-Tab_Linux.sh) и выполните `sh ./install_FXT-Team-New-Tab_Linux.sh` в папке загрузки. Понадобится Python 3.8 или новее.
+2. Когда установщик предложит ежедневные автообновления, выберите **Да** или **Нет**. В терминале можно ввести **1** или **2** при любой раскладке. **Enter** пропускает включение расписания.
 3. Если профилей Chrome несколько, выберите нужный в установщике. Он откроет `chrome://extensions/` в этом профиле. Включите **Режим разработчика**, нажмите **Загрузить распакованное расширение** и выберите папку `extension`, путь к которой покажет установщик.
 
 ## Обновление по клику

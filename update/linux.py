@@ -15,6 +15,7 @@ import tempfile
 from contextlib import redirect_stdout
 from pathlib import Path
 from urllib.request import urlopen
+from urllib.error import HTTPError, URLError
 from zipfile import ZipFile
 
 TOOLS = Path(__file__).resolve().parent
@@ -34,6 +35,8 @@ def version(folder):
 
 
 def check(preview=False):
+    if not shutil.which("ssh-keygen"):
+        raise ValueError("Для проверки подписи нужен ssh-keygen. Установите клиент OpenSSH (пакет openssh-client в Ubuntu/Debian или openssh-clients в Fedora).")
     repo = (TOOLS / "repository.txt").read_text().strip()
     if not re.fullmatch(r"[\w-][\w.-]*/[\w-][\w.-]*", repo, re.ASCII):
         raise ValueError("Invalid repository.txt")
@@ -52,12 +55,22 @@ def check(preview=False):
             archive = stage / "chrome-extension.zip"
             signature = stage / "chrome-extension.zip.sig"
             for address, file in ((url, archive), (url + ".sig", signature)):
-                with urlopen(address, timeout=60) as response, file.open("wb") as out:
-                    shutil.copyfileobj(response, out)
+                try:
+                    with urlopen(address, timeout=60) as response, file.open("wb") as out:
+                        shutil.copyfileobj(response, out)
+                except HTTPError as error:
+                    raise ValueError(f"GitHub вернул HTTP {error.code} для {address}. Проверьте доступ к ссылке и наличие файла в последнем релизе.") from error
+                except (URLError, TimeoutError) as error:
+                    raise ValueError(f"Не удалось скачать {address}. Проверьте соединение и настройки прокси. {error}") from error
             with archive.open("rb") as package:
-                subprocess.run(["ssh-keygen", "-Y", "verify", "-I", "fxt-release",
+                verification = subprocess.run(["ssh-keygen", "-Y", "verify", "-I", "fxt-release",
                                 "-n", "fxtteam-chrome", "-f", str(TOOLS / "allowed_signers"),
-                                "-s", str(signature)], stdin=package, stdout=subprocess.DEVNULL, check=True)
+                                "-s", str(signature)], stdin=package, capture_output=True)
+                if verification.returncode:
+                    detail = (verification.stderr + verification.stdout).decode(errors="replace").strip()
+                    if re.search(r"(unknown|illegal|invalid|unrecognized) option[^\n]*\bY\b", detail, re.I):
+                        raise ValueError("Клиент OpenSSH не поддерживает проверку подписей (-Y verify). Обновите пакет клиента OpenSSH.")
+                    raise ValueError(f"Не удалось подтвердить подпись пакета. Проверьте источник установщика. {detail}")
             candidate = stage / "candidate"
             with ZipFile(archive) as package:
                 package.extractall(candidate)
@@ -116,6 +129,12 @@ def main(action):
     elif action == "check":
         check()
     elif action == "enable":
+        if not shutil.which("systemctl"):
+            raise ValueError("Для расписания требуется пользовательский systemd. Команда systemctl отсутствует. Обновления доступны вручную через иконку расширения.")
+        manager = subprocess.run(["systemctl", "--user", "show-environment"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if manager.returncode:
+            detail = manager.stderr.decode(errors="replace").strip()
+            raise ValueError(f"Служба systemd пользователя недоступна. Повторите запуск из своего сеанса Linux. {detail}")
         check()
         units.mkdir(parents=True, exist_ok=True)
         command = f"{unit_arg(sys.executable)} {unit_arg(TOOLS / 'linux.py')} check"

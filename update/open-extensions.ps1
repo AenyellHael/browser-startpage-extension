@@ -1,11 +1,11 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $exe = foreach ($base in $env:LOCALAPPDATA,$env:ProgramFiles,${env:ProgramFiles(x86)}) {
     if ($base) {
         $candidate = Join-Path $base 'Google/Chrome/Application/chrome.exe'
         if (Test-Path -LiteralPath $candidate) { $candidate; break }
     }
 }
-if (!$exe) { throw 'Google Chrome was not found.' }
+if (!$exe) { throw 'Google Chrome не найден в стандартных папках. Если он установлен в другом месте, откройте chrome://extensions/ вручную. Иначе установите Google Chrome и снова запустите установщик.' }
 $data = Join-Path $env:LOCALAPPDATA 'Google/Chrome/User Data'
 $state = Join-Path $data 'Local State'
 $profile = 'Default'
@@ -18,12 +18,12 @@ if (Test-Path -LiteralPath $state) {
     } | Sort-Object Name)
     if ($profiles.Count -eq 1) { $profile = $profiles[0].Name }
     if ($profiles.Count -gt 1) {
-        Write-Host 'Choose a Chrome profile:'
+        Write-Host 'Выберите профиль Google Chrome:'
         for ($i=0; $i -lt $profiles.Count; $i++) {
             Write-Host ('{0}. {1} ({2})' -f ($i+1),$profiles[$i].Value.name,$profiles[$i].Name)
         }
         do {
-            $answer = Read-Host 'Profile number (Enter to skip)'
+            $answer = Read-Host 'Номер профиля (Enter — пропустить)'
             if (!$answer) { return }
             $index = 0
         } until ([int]::TryParse($answer,[ref]$index) -and $index -ge 1 -and $index -le $profiles.Count)
@@ -68,4 +68,4 @@ do {
     if ([FXT.ChromeWindow]::OpenExtensions($title)) { return }
     Start-Sleep -Milliseconds 150
 } while ([DateTime]::UtcNow -lt $deadline)
-Write-Host 'Open chrome://extensions/ in the selected Chrome window.'
+Write-Host 'Откройте chrome://extensions/ в выбранном окне Chrome.'
