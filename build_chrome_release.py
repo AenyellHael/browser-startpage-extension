@@ -34,7 +34,7 @@ def build(source, repository, key, output):
         raise ValueError("Expected GitHub OWNER/REPO")
     manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
     files = ["manifest.json", "newtab.html", "newtab.js", "popup.html", "popup.js",
-             "manual-update.js", *sorted(set(manifest["icons"].values()))]
+             "manual-update.js", "installed.js", *sorted(set(manifest["icons"].values()))]
     version = manifest["version"]
     if not re.fullmatch(r"\d+(\.\d+){1,3}", version, re.ASCII):
         raise ValueError("Expected a numeric Chrome version")

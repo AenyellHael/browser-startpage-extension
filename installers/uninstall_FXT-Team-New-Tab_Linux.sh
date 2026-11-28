@@ -45,7 +45,7 @@ with lockfile.open("a") as lock:
     host = units.parent.parent / "google-chrome/NativeMessagingHosts/ru.fxtteam.newtab_update.json"
     if host.exists() and json.loads(host.read_text())["path"] == str(root / "update/linux.py"):
         host.unlink()
-    files = ["extension/popup.html", "extension/popup.js", "extension/manual-update.js",
+    files = ["extension/popup.html", "extension/popup.js", "extension/manual-update.js", "extension/installed.js",
              "update/native.cmd", "update/setup.ps1", "update/open-extensions.ps1", "update/install-help.html", "extension/newtab.html", "extension/newtab.js", "update/linux.py", "update/windows.ps1",
              "update/allowed_signers", "update/repository.txt", "README.md", "extension/manifest.json"]
     files.extend(f"extension/icons/icon{size}.png" for size in (16, 32, 48, 128))
